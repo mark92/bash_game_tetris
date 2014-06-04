@@ -1,0 +1,403 @@
+﻿#!/bin/sh
+trap 'stty echo;echo -e "\nExiting..."; exit' EXIT #TRAP THAT CAPTURES CTRL+C AND CHANGES TERMINAL ECHO TO + BECAUSE IT IS CHANGED TO - SOMEWHERE BELOW TO HIDE USER INPUT
+
+#Turn off echoing of input.
+stty -echo
+
+
+#Global variables:
+shape="[]"				#shape of tetrimino figure
+f="\e[38;05;231m..\e[0m" 		#fieldFiller
+uncolor="\e[0m"				#returning terminal to standard colors after coloring
+numberOfLines=18			#number of lines in the field
+max=$(($(($numberOfLines * 12)) + 1))	#number of elements in the field array(12 is length of line, 1 is the extra free character in begining)
+score=0					#players score
+difficulty=0				#modifier that changes speed of the game [0-20]
+stolenTime=0				#time that increases with difficulty
+timeGrace=0.21				#time for the tetrimino to fall
+timeSteer=0.25				#time for the player to commit input
+
+
+#Tetriminos starting coordinates list:
+tetriminoT=( '' 6 17 18 19 ) 	#1
+tetriminoJ=( '' 5 17 18 19 ) 	#2
+tetriminoL=( '' 7 17 18 19 ) 	#3
+tetriminoO=( '' 5 6 17 18 ) 	#4
+tetriminoZ=( '' 5 6 18 19 ) 	#5
+tetriminoS=( '' 6 7 17 18 ) 	#6
+tetriminoI=( '' 4 5 6 7 ) 	#7
+
+
+level=( '' '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '|' "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" "$f" '|' 
+	   '^^^^^^^^^^^^^^^^^^^^^^' )
+
+#Outputs game field with piece, stage and score info
+draw(){
+screen=''
+for i in `seq 1 $max`
+do
+	screen="$screen"${levelBuf[$i]}""
+	if [ $(($i % 12)) -eq 0 ]
+		then screen="$screen\n"
+	fi
+done
+
+clear
+showInfo
+echo -e $screen
+}
+
+#Generates misc info
+showInfo(){
+echo -n "Level: $difficulty  "
+echo "Score: $score"
+case $nextShape in
+	1)echo -e "         []  \n       [][][]";;
+	2)echo -e "       []\n       [][][]";;
+	3)echo -e "           []\n       [][][]";;
+	4)echo -e "       [][]\n       [][]";;
+	5)echo -e "       [][]\n         [][]";;
+	6)echo -e "         [][]\n       [][]";;
+	7)echo -e "       \n       [][][][]";;
+esac
+echo ''
+}
+
+#Repositions the pieces in the specified curentPosition
+moveShapes(){
+for i in `seq 1 4`
+do
+	levelBuf[${curentPos[$i]}]=$curentColor$shape$uncolor
+done
+}
+
+#Relationaly changes the angle of the piece depending on the piece($tetrimino [1-7]) and on the state which it is in($state [1-4]), also sets the corresponding state
+rotate(){
+case $tetrimino in
+	1)case $state in
+			1)curentPos[2]=$((${curentPos[2]} + 13));;
+			2)curentPos[1]=$((${curentPos[1]} + 11));;
+			3)curentPos[4]=$((${curentPos[4]} - 13));;
+			4)curentPos[2]=$((${curentPos[2]} - 13))
+			  curentPos[1]=$((${curentPos[1]} - 11))
+			  curentPos[4]=$((${curentPos[4]} + 13));;
+	  esac;;
+
+	2)case $state in
+			1)curentPos[1]=$((${curentPos[1]} + 2))	
+			  curentPos[2]=$((${curentPos[2]} - 11))
+			  curentPos[4]=$((${curentPos[4]} + 11));;
+			2)curentPos[1]=$((${curentPos[1]} + 24))
+			  curentPos[2]=$((${curentPos[2]} + 13))
+			  curentPos[4]=$((${curentPos[4]} - 13));;
+			3)curentPos[1]=$((${curentPos[1]} - 2))
+			  curentPos[2]=$((${curentPos[2]} + 11))	
+			  curentPos[4]=$((${curentPos[4]} - 11));;
+			4)curentPos[1]=$((${curentPos[1]} - 24))
+			  curentPos[2]=$((${curentPos[2]} - 13))
+			  curentPos[4]=$((${curentPos[4]} + 13));;
+	  esac;;
+
+	3)case $state in
+			1)curentPos[1]=$((${curentPos[1]} + 24))	
+			  curentPos[2]=$((${curentPos[2]} - 11))
+			  curentPos[4]=$((${curentPos[4]} + 11));;
+			2)curentPos[1]=$((${curentPos[1]} - 2))
+			  curentPos[2]=$((${curentPos[2]} + 13))
+			  curentPos[4]=$((${curentPos[4]} - 13));;
+			3)curentPos[1]=$((${curentPos[1]} - 24))
+			  curentPos[2]=$((${curentPos[2]} + 11))	
+			  curentPos[4]=$((${curentPos[4]} - 11));;
+			4)curentPos[1]=$((${curentPos[1]} + 2))
+			  curentPos[2]=$((${curentPos[2]} - 13))
+			  curentPos[4]=$((${curentPos[4]} + 13));;
+	  esac;;
+
+	5)case $state in
+			1)curentPos[1]=$((${curentPos[1]} + 2))	
+			  curentPos[2]=$((${curentPos[2]} + 13))
+			  curentPos[4]=$((${curentPos[4]} + 11));;
+			2)curentPos[1]=$((${curentPos[1]} - 2))
+			  curentPos[2]=$((${curentPos[2]} - 13))
+			  curentPos[4]=$((${curentPos[4]} - 11));;
+			3)curentPos[1]=$((${curentPos[1]} + 2))	
+			  curentPos[2]=$((${curentPos[2]} + 13))
+			  curentPos[4]=$((${curentPos[4]} + 11));;
+			4)curentPos[1]=$((${curentPos[1]} - 2))
+			  curentPos[2]=$((${curentPos[2]} - 13))
+			  curentPos[4]=$((${curentPos[4]} - 11));;
+	  esac;;
+
+	6)case $state in
+			1)curentPos[1]=$((${curentPos[1]} + 11))	
+			  curentPos[2]=$((${curentPos[2]} - 2))
+			  curentPos[3]=$((${curentPos[3]} + 13));;
+			2)curentPos[1]=$((${curentPos[1]} - 11))
+			  curentPos[2]=$((${curentPos[2]} + 2))
+			  curentPos[3]=$((${curentPos[3]} - 13));;
+			3)curentPos[1]=$((${curentPos[1]} + 11))	
+			  curentPos[2]=$((${curentPos[2]} - 2))
+			  curentPos[3]=$((${curentPos[3]} + 13));;
+			4)curentPos[1]=$((${curentPos[1]} - 11))
+			  curentPos[2]=$((${curentPos[2]} + 2))
+			  curentPos[3]=$((${curentPos[3]} - 13));;
+	  esac;;
+
+	7)case $state in
+			1)curentPos[1]=$((${curentPos[1]} - 10))	
+			  curentPos[2]=$((${curentPos[2]} + 13))
+			  curentPos[4]=$((${curentPos[4]} + 23));;
+			2)curentPos[1]=$((${curentPos[1]} + 10))
+			  curentPos[2]=$((${curentPos[2]} - 13))
+			  curentPos[4]=$((${curentPos[4]} - 23));;
+			3)curentPos[1]=$((${curentPos[1]} - 10))	
+			  curentPos[2]=$((${curentPos[2]} + 13))
+			  curentPos[4]=$((${curentPos[4]} + 23));;
+			4)curentPos[1]=$((${curentPos[1]} + 10))
+			  curentPos[2]=$((${curentPos[2]} - 13))
+			  curentPos[4]=$((${curentPos[4]} - 23));;
+	  esac;;
+esac
+state=$(($(($state % 4)) + 1))
+}
+
+#Seeks for height of the nearest block to drop the piece in that position
+drop(){
+moveCount=17
+moveCountBuf=17
+for i in {1..4}
+do
+	for j in {1..17}
+	do
+		if [ "${level[$((${curentPos[$i]} + $(($j * 12))))]}" != $f  ]; then moveCountBuf=$(($j - 1)); break; fi
+	done
+if [ $moveCount -gt $moveCountBuf ]; then moveCount=$moveCountBuf;fi
+done
+moveCount=$(($moveCount * 12))
+
+for i in {1..4}
+do
+	curentPos[$i]=$((${curentPos[$i]} + $moveCount))
+done
+}
+
+
+#Is a hub for all the steerinf functions, analises input and check whether it can be commited
+steering(){
+buffer=("${curentPos[@]}")
+for i in `seq 1 4`
+do
+if [ `echo "$a" | grep -c 'C'` -ne 0 ] ; then curentPos[$i]=$((${curentPos[$i]} + 1)); fi
+if [ `echo "$a" | grep -c 'D'` -ne 0 ] ; then curentPos[$i]=$((${curentPos[$i]} - 1)); fi
+done
+if [ `echo "$a" | grep -c 'A'` -ne 0 ] ; then rotate ; fi
+if [ `echo "$a" | grep -c 'B'` -ne 0 ] ; then skip ; fi
+if [ `echo "$a" | grep -c ' '` -ne 0 ]   ; then drop; fi
+
+collisionObjectOnSteering
+if [ $collision = false ]
+	then
+		levelBuf=("${level[@]}")
+		moveShapes
+		draw
+	else curentPos=("${buffer[@]}")
+fi
+}
+
+#Checks for collision with inactive tetrimino pieces, if so, stops the movement
+collisionObject(){
+for i in `seq 1 4`
+do
+	if [ "${level[$((${curentPos[$i]} + 12))]}" != $f ]; then curentPos=( '' $max $max $max $max );fi
+done
+}
+
+#Checks for collision of startPosition of the current tetrimino and inactive tetriminoes, if so, ends the game
+collisionEndGame(){
+for i in `seq 1 4`
+do
+	if [ "${level[$((${curentPos[$i]}))]}" != $f ]; then echo GAME OVER; result; exit; fi
+done
+}
+
+#Checks whether user movement violates: 1) ceiling 2)other tetriminoes 3)the walls, if so, sets the collision meter on for other methods to reset the coordinates
+collisionObjectOnSteering(){
+collision=false
+for i in `seq 1 4`
+do
+	if [ ${curentPos[$i]} -le 1 ] 
+	then collision=true 
+	else if [ "${level[${curentPos[$i]}]}" != $f -o "${level[${curentPos[$i]}]}" = '|'  -o ${curentPos[$i]} -ge $max ]
+	     then collision=true
+	     fi
+	fi
+done
+}
+
+#Checks for collision with terain, and if its the next turn(on collision the position parameters are maxed) and activates a selected shape, then resets, the checks for lines that can score points(i.e. full lines)
+collisionField(){
+for i in `seq 1 4`
+do
+	if [ ${nextPos[$i]} -ge $max ]; then activateNewShape; nextPos=( "${startPos[@]}" ); level=("${levelBuf[@]}"); deleteLines; fi
+done
+}
+
+#Calculates coordinates for going down 1 line
+moveDown(){
+for i in `seq 1 4`
+do
+	nextPos[$i]=$((${curentPos[$i]} + 12))
+done
+}
+
+#A steering method, moves the curent position 1 line down
+skip(){
+for i in `seq 1 4`
+do
+	curentPos[$i]=$((${curentPos[$i]} + 12))
+done
+}
+
+#New shape generator, selects the NEXT shape
+selectNewShape(){
+case $[ ( $RANDOM % 7 )  + 1 ] in
+	1) 	startPos=("${tetriminoT[@]}") 
+		futureColor="\e[38;05;45m"
+		nextShape=1 ;;
+	2) 	startPos=("${tetriminoL[@]}")
+		futureColor="\e[38;05;93m"
+		nextShape=3 ;;
+	3) 	startPos=("${tetriminoJ[@]}")
+		futureColor="\e[38;05;208m"
+		nextShape=2 ;;
+	4) 	startPos=("${tetriminoO[@]}") 
+		futureColor="\e[38;05;184m"
+		nextShape=4;;
+	5) 	startPos=("${tetriminoZ[@]}")
+		futureColor="\e[38;05;112m"
+		nextShape=5 ;;
+	6) 	startPos=("${tetriminoS[@]}")
+		futureColor="\e[38;05;165m"
+		nextShape=6 ;;
+	7) 	startPos=("${tetriminoI[@]}")
+		futureColor="\e[38;05;88m"
+		nextShape=7 ;;
+esac
+}
+
+#NEXT shape activator
+activateNewShape(){
+curentColor=$futureColor
+tetrimino=$nextShape
+state=1
+}
+
+#Seeks for full lines and eliminates them, if any lines are eliminated increases difficulty by 1, calculates score for each line destroyed
+deleteLines(){
+rowsDestroyed=false
+for i in `seq 0 $(($numberOfLines - 1))`
+do
+	lineCleared=true
+	for j in `seq 2 11`
+	do	
+		if [ "${level[$(($(($i * 12)) + $j))]}" = $f ]; then lineCleared=false; break; fi
+	done
+	if $lineCleared
+		then
+			for j in `seq 2 11`
+			do	
+				level[$(($(($i * 12)) + $j))]=$f
+			done
+			h=$i
+			while [ $h -ne 0 ]
+			do
+				for j in `seq 2 11`
+				do
+					level[$(($(($h * 12)) + $j))]="${level[$(($(($(($h * 12)) + $j)) - 12))]}"
+				done	
+				h=$(($h - 1))		
+			done
+			rowsDestroyed=true
+			calculateScore
+	fi
+done
+if $rowsDestroyed; then increaseDifficulty; fi
+}
+
+#A method to increase difficulty(decrease available time)
+increaseDifficulty(){
+if [ $difficulty -lt 20 ]
+then
+	difficulty=$(($difficulty + 1))
+	timeGrace=`echo 'scale=2;'$timeGrace' - 0.01' | bc `
+	timeSteer=`echo 'scale=2;'$timeSteer' - 0.01' | bc `
+fi
+}
+
+#Calculates score depending on difficulty, the formula is 100*(level+1)*numberOfLinesDestroyed
+calculateScore(){
+levelModifier=$(($(($difficulty + 1)) * 100))
+score=$(($score + $levelModifier))
+}
+
+#Displays endgame results and prompts for submitting the score, either way shows top 15 results
+result(){
+stty echo
+echo "Your score: $score"
+}
+
+
+selectNewShape			#selecting the first shape
+activateNewShape		#activating it
+nextPos=("${startPos[@]}")	#assuming the position of the selected shape
+
+#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+#GAME START !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+while true
+do
+
+curentPos=("${nextPos[@]}")	#assigning the upcoming position
+if [ "${curentPos[1]}" = "${startPos[1]}" -a "${curentPos[2]}" = "${startPos[2]}" -a "${curentPos[3]}" == "${startPos[3]}" -a "${curentPos[4]}" == "${startPos[4]}" ]; then selectNewShape; fi	#checking whether a new shape should be generated
+
+collisionEndGame			#checking if the tetrimino stack doesnt colide with spawn
+
+levelBuf=("${level[@]}")		#creating a dummy level to animate changing positions freely
+moveShapes				#moving shapes to the start
+draw					#animating the real thing
+
+#Accepting user input
+for i in `seq 1 4`
+do
+	if IFS= read -n1 -t $timeSteer a
+		then
+			read -n2 -t 0.001 b
+			read -n100000 -t 0.000001 cleanUp
+			a="$a$b"
+			steering
+	fi
+done
+
+sleep $timeGrace			#A little time for the tetrimino to fall
+collisionObject 			#Checking if no collisions
+moveDown				#Going down 1 level
+collisionField 				#Checking if not colided with terrain , or a new tetrimino fall shouldn't start(then activates the next shape), also checks for points
+
+done
